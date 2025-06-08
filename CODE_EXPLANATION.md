@@ -8,6 +8,7 @@ Szczegółowe wyjaśnienie implementacji aplikacji muzycznej w DynamoDB.
 4. [Funkcje główne](#funkcje-główne)
 5. [Wzorce zapytań](#wzorce-zapytań)
 6. [Najlepsze praktyki](#najlepsze-praktyki)
+7. [Zarządzanie przez AWS CLI](#zarządzanie-przez-aws-cli)
 
 ## Architektura ogólna
 
@@ -441,6 +442,140 @@ while True:
     last_key = response.get('LastEvaluatedKey')
     if not last_key:
         break
+```
+
+## Zarządzanie przez AWS CLI
+
+Po uruchomieniu aplikacji możesz sprawdzić i zarządzać tabelami przez AWS CLI. Oto najważniejsze komendy:
+
+### Wyświetlanie tabel
+
+```bash
+# Lista wszystkich tabel w regionie
+aws dynamodb list-tables --region eu-north-1
+
+# Szczegóły konkretnej tabeli
+aws dynamodb describe-table --table-name Users --region eu-north-1
+
+# Tylko podstawowe info o tabeli
+aws dynamodb describe-table --table-name Users --region eu-north-1 --query 'Table.{Name:TableName,Status:TableStatus,Items:ItemCount}'
+```
+
+### Przeglądanie zawartości tabel
+
+```bash
+# Wszystkie użytkownicy
+aws dynamodb scan --table-name Users --region eu-north-1
+
+# Konkretny użytkownik
+aws dynamodb get-item \
+  --table-name Users \
+  --key '{"user_id": {"S": "user_001"}}' \
+  --region eu-north-1
+
+# Utwory konkretnego artysty
+aws dynamodb query \
+  --table-name Music \
+  --key-condition-expression "Artist = :artist" \
+  --expression-attribute-values '{":artist": {"S": "The Beatles"}}' \
+  --region eu-north-1
+
+# Historia odtworzeń użytkownika (najnowsze pierwsze)
+aws dynamodb query \
+  --table-name UserListeningHistory \
+  --key-condition-expression "user_id = :uid" \
+  --expression-attribute-values '{":uid": {"S": "user_001"}}' \
+  --scan-index-forward false \
+  --region eu-north-1
+```
+
+### Zapytania na Global Secondary Indexes
+
+```bash
+# Top artyści rocka (przez GSI)
+aws dynamodb query \
+  --table-name Artists \
+  --index-name genre-popularity-index \
+  --key-condition-expression "genre = :genre" \
+  --expression-attribute-values '{":genre": {"S": "rock"}}' \
+  --scan-index-forward false \
+  --region eu-north-1
+
+# Koncerty w Londynie
+aws dynamodb query \
+  --table-name Concerts \
+  --index-name city-date-index \
+  --key-condition-expression "city = :city" \
+  --expression-attribute-values '{":city": {"S": "London"}}' \
+  --region eu-north-1
+```
+
+### Przydatne flagi i filtry
+
+```bash
+# Tylko wybrane atrybuty (projection)
+aws dynamodb scan \
+  --table-name Artists \
+  --projection-expression "artist_id, #n, genre, popularity_score" \
+  --expression-attribute-names '{"#n": "name"}' \
+  --region eu-north-1
+
+# Z filtrem (scan + filter po stronie AWS)
+aws dynamodb scan \
+  --table-name Music \
+  --filter-expression "genre = :genre" \
+  --expression-attribute-values '{":genre": {"S": "rock"}}' \
+  --region eu-north-1
+
+# Limit wyników
+aws dynamodb scan \
+  --table-name Music \
+  --max-items 5 \
+  --region eu-north-1
+
+# Czytelniejszy output (tylko Items)
+aws dynamodb scan \
+  --table-name Users \
+  --query 'Items' \
+  --region eu-north-1
+```
+
+### Monitorowanie i debugowanie
+
+```bash
+# Status wszystkich tabel
+aws dynamodb list-tables --region eu-north-1 | jq -r '.TableNames[]' | while read table; do
+  echo "=== $table ==="
+  aws dynamodb describe-table --table-name "$table" --region eu-north-1 --query 'Table.{Status:TableStatus,Items:ItemCount,Size:TableSizeBytes}'
+done
+
+# Sprawdzenie pojemności i throttling
+aws dynamodb describe-table \
+  --table-name Music \
+  --region eu-north-1 \
+  --query 'Table.{BillingMode:BillingModeSummary.BillingMode,RCU:ProvisionedThroughput.ReadCapacityUnits,WCU:ProvisionedThroughput.WriteCapacityUnits}'
+
+# Sprawdzenie GSI
+aws dynamodb describe-table \
+  --table-name Artists \
+  --region eu-north-1 \
+  --query 'Table.GlobalSecondaryIndexes[*].{IndexName:IndexName,Status:IndexStatus}'
+```
+
+### Czyszczenie środowiska
+
+```bash
+# Lista tabel do usunięcia
+echo "Users Playlists UserListeningHistory Artists Concerts Music" | tr ' ' '\n'
+
+# Usunięcie konkretnej tabeli
+aws dynamodb delete-table --table-name Users --region eu-north-1
+
+# Usunięcie wszystkich tabel projektu (ostrożnie!)
+for table in Users Playlists UserListeningHistory Artists Concerts Music; do
+  echo "Deleting $table..."
+  aws dynamodb delete-table --table-name "$table" --region eu-north-1 2>/dev/null || echo "$table doesn't exist"
+done
 ```
 
 ---
